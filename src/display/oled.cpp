@@ -18,25 +18,29 @@ constexpr uint8_t kPageCount = 3;
 
 void drawBatteryPage(const BatteryStatus &s) {
     u8g2.setFont(u8g2_font_6x10_tf);
+    int idx = s.firstPresentIndex();
+
     char line1[32];
-    if (s.havePack) {
-        snprintf(line1, sizeof(line1), "%.1fV  %.1fA", s.packVoltage, s.packCurrent);
+    if (idx >= 0 && s.nodes[idx].haveCellVoltages) {
+        const NodeStatus &n = s.nodes[idx];
+        snprintf(line1, sizeof(line1), "%.2fV %.0fW", n.packVoltage(), n.packPowerW);
     } else {
         snprintf(line1, sizeof(line1), "no pack data");
     }
     u8g2.drawStr(0, 10, line1);
 
     char line2[32];
-    if (s.haveSoc) {
-        snprintf(line2, sizeof(line2), "SOC %u%%  SOH %u%%", s.soc, s.soh);
+    if (idx >= 0 && s.nodes[idx].socByte5 >= 0) {
+        snprintf(line2, sizeof(line2), "node%d SOC %d%%", idx + 1, s.nodes[idx].socByte5);
     } else {
         snprintf(line2, sizeof(line2), "SOC --");
     }
     u8g2.drawStr(0, 22, line2);
 
     char line3[32];
-    if (s.havePack) {
-        snprintf(line3, sizeof(line3), "Temp %.1fC", s.packTemperature);
+    if (idx >= 0 && s.nodes[idx].haveBoardTemp) {
+        const NodeStatus &n = s.nodes[idx];
+        snprintf(line3, sizeof(line3), "Temp %.1fC", n.boardTemp[0]);
     } else {
         snprintf(line3, sizeof(line3), "Temp --");
     }

@@ -1,5 +1,6 @@
 #include "wifi_setup.h"
 #include "settings.h"
+#include "debug/log_sink.h"
 #include <WiFi.h>
 #include <Arduino.h>
 
@@ -13,7 +14,7 @@ void startAp() {
     WiFi.mode(WIFI_AP);
     WiFi.softAP(kApSsid);
     g_apMode = true;
-    log_w("WiFi: falling back to AP mode, SSID=%s, IP=%s", kApSsid,
+    RLOGW("WiFi: falling back to AP mode, SSID=%s, IP=%s", kApSsid,
           WiFi.softAPIP().toString().c_str());
 }
 
@@ -32,7 +33,7 @@ void begin() {
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(s.wifiSsid.c_str(), s.wifiPassword.c_str());
-    log_i("WiFi: connecting to %s ...", s.wifiSsid.c_str());
+    RLOGI("WiFi: connecting to %s ...", s.wifiSsid.c_str());
 
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < kStaTimeoutMs) {
@@ -41,10 +42,10 @@ void begin() {
 
     if (WiFi.status() == WL_CONNECTED) {
         g_apMode = false;
-        log_i("WiFi: connected, IP=%s", WiFi.localIP().toString().c_str());
+        RLOGI("WiFi: connected, IP=%s", WiFi.localIP().toString().c_str());
         startNtp();
     } else {
-        log_w("WiFi: STA connect to '%s' failed/timed out", s.wifiSsid.c_str());
+        RLOGW("WiFi: STA connect to '%s' failed/timed out", s.wifiSsid.c_str());
         startAp();
     }
 }

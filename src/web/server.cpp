@@ -2,6 +2,7 @@
 #include "pages.h"
 #include "../settings.h"
 #include "../can/twai_bus.h"
+#include "../debug/log_sink.h"
 #include "../history.h"
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
@@ -30,21 +31,10 @@ bool requireAuthIfSet(AsyncWebServerRequest *request) {
 void handleStatus(AsyncWebServerRequest *request) {
     JsonDocument doc;
     const BatteryStatus &s = *g_status;
-    doc["packVoltage"] = s.packVoltage;
-    doc["packCurrent"] = s.packCurrent;
-    doc["packTemperature"] = s.packTemperature;
-    doc["haveSoc"] = s.haveSoc;
-    doc["soc"] = s.soc;
-    doc["soh"] = s.soh;
-    doc["chargeVoltageLimit"] = s.chargeVoltageLimit;
-    doc["chargeCurrentLimit"] = s.chargeCurrentLimit;
-    doc["dischargeCurrentLimit"] = s.dischargeCurrentLimit;
-    doc["dischargeVoltageLimit"] = s.dischargeVoltageLimit;
-    doc["haveAlarms"] = s.haveAlarms;
-    doc["alarms"] = s.alarms;
-    doc["warnings"] = s.warnings;
-    doc["manufacturerName"] = s.manufacturerName;
-    doc["bmsName"] = s.bmsName;
+    doc["buildTime"] = __DATE__ " " __TIME__;
+    doc["freeHeap"] = ESP.getFreeHeap();
+    doc["maxAllocHeap"] = ESP.getMaxAllocHeap();
+    doc["minFreeHeap"] = ESP.getMinFreeHeap();
     doc["framesSeen"] = s.framesSeen;
     doc["canAlive"] = CanBus::isAlive();
     doc["canRx"] = CanBus::rxCount();
@@ -54,21 +44,75 @@ void handleStatus(AsyncWebServerRequest *request) {
     doc["canBusState"] = CanBus::busStateStr();
     doc["keepaliveEnabled"] = SettingsStore::get().keepaliveEnabled;
 
+    JsonArray nodes = doc["nodes"].to<JsonArray>();
+    for (size_t i = 0; i < kMaxNodes; i++) {
+        const NodeStatus &n = s.nodes[i];
+        if (!n.present) continue;
+        JsonObject o = nodes.add<JsonObject>();
+        o["id"] = i + 1;
+        o["lastFrameMs"] = n.lastFrameMs;
+        o["heartbeat"] = n.heartbeat;
+
+        if (n.haveCellVoltages) {
+            o["packVoltage"] = n.packVoltage();
+            JsonArray cv = o["cellVoltage"].to<JsonArray>();
+            for (float v : n.cellVoltage) cv.add(v);
+        }
+        if (n.haveMinMax) {
+            o["minCellVoltage"] = n.minCellVoltage;
+            o["maxCellVoltage"] = n.maxCellVoltage;
+            o["statusFlags"] = n.statusFlags;
+        }
+        if (n.havePackPower) {
+            o["packPowerW"] = n.packPowerW;
+            o["socByte4"] = n.socByte4;
+            o["socByte5"] = n.socByte5;
+        }
+        if (n.haveBoardTemp) {
+            JsonArray bt = o["boardTemp"].to<JsonArray>();
+            for (float t : n.boardTemp) bt.add(t);
+        }
+        if (n.haveCellTemp) {
+            JsonArray ct = o["cellTemp"].to<JsonArray>();
+            for (int8_t t : n.cellTemp) ct.add(t);
+        }
+        if (n.haveRelay) {
+            o["relayClosed"] = n.relayClosed;
+            o["faultBits"] = n.faultBits;
+        }
+        if (n.haveCurrentLimit) {
+            o["currentLimit"] = n.currentLimit;
+            o["unknownConfig"] = n.unknownConfig;
+        }
+        if (n.haveBalance) {
+            o["balanceBitmask"] = n.balanceBitmask;
+            o["balanceExtra"] = n.balanceExtra;
+        }
+        if (n.haveIdentity) {
+            o["readyPhase"] = n.readyPhase;
+        }
+    }
+
     String out;
     serializeJson(doc, out);
     request->send(200, "application/json", out);
 }
 
 void handleHistory(AsyncWebServerRequest *request) {
-    static HistorySample buf[2880];
-    size_t n = History::getRecent(buf, 2880);
+    // Capped well below the full 2880-sample ring (24h @ 30s/sample): building
+    // an ArduinoJson document for thousands of objects plus the resulting
+    // ~170KB string doesn't fit in this device's RAM. A few hundred points is
+    // already more than the dashboard's sparkline can usefully show.
+    constexpr size_t kMaxReturned = 300;
+    static HistorySample buf[kMaxReturned];
+    size_t n = History::getRecent(buf, kMaxReturned);
     JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();
+    JsonArray arr = doc["samples"].to<JsonArray>();
     for (size_t i = 0; i < n; i++) {
         JsonObject o = arr.add<JsonObject>();
         o["t"] = buf[i].epochSec;
         o["v"] = buf[i].packVoltage;
-        o["i"] = buf[i].packCurrent;
+        o["p"] = buf[i].packPowerW;
         o["soc"] = buf[i].soc;
         o["temp"] = buf[i].packTemperature;
     }
@@ -82,8 +126,14 @@ void handleCanFrames(AsyncWebServerRequest *request) {
     if (request->hasParam("since")) {
         since = request->getParam("since")->value().toInt();
     }
-    static CanFrame buf[CanFrameLog::kCapacity];
-    size_t n = CanBus::frameLog().readSince(since, buf, CanFrameLog::kCapacity);
+    // Capped well below CanFrameLog::kCapacity (300): building an ArduinoJson
+    // document for that many objects (each with a nested data field) doesn't
+    // fit in this device's RAM. The /can page polls every 400ms, so a smaller
+    // per-response cap just means catching up over a couple of extra polls
+    // after a burst — fine for a live debug view, not an audit log.
+    constexpr size_t kMaxReturned = 50;
+    static CanFrame buf[kMaxReturned];
+    size_t n = CanBus::frameLog().readSince(since, buf, kMaxReturned);
 
     JsonDocument doc;
     doc["seq"] = since;
@@ -99,8 +149,33 @@ void handleCanFrames(AsyncWebServerRequest *request) {
         o["id"] = buf[i].id;
         o["dlc"] = buf[i].dlc;
         o["rx"] = buf[i].rx;
-        JsonArray data = o["data"].to<JsonArray>();
-        for (int b = 0; b < buf[i].dlc; b++) data.add(buf[i].data[b]);
+        char hex[17];
+        for (int b = 0; b < buf[i].dlc; b++) {
+            snprintf(hex + b * 2, 3, "%02x", buf[i].data[b]);
+        }
+        hex[buf[i].dlc * 2] = '\0';
+        o["data"] = String(hex);
+    }
+    String out;
+    serializeJson(doc, out);
+    request->send(200, "application/json", out);
+}
+
+void handleLogs(AsyncWebServerRequest *request) {
+    uint32_t since = 0;
+    if (request->hasParam("since")) {
+        since = request->getParam("since")->value().toInt();
+    }
+    static LogLine buf[LogRingBuffer::kCapacity];
+    size_t n = LogSink::buffer().readSince(since, buf, LogRingBuffer::kCapacity);
+
+    JsonDocument doc;
+    doc["seq"] = since;
+    JsonArray arr = doc["lines"].to<JsonArray>();
+    for (size_t i = 0; i < n; i++) {
+        JsonObject o = arr.add<JsonObject>();
+        o["t"] = buf[i].timestampMs;
+        o["m"] = buf[i].text;
     }
     String out;
     serializeJson(doc, out);
@@ -163,19 +238,19 @@ void handleRestart(AsyncWebServerRequest *request) {
 void handleUpdateUpload(AsyncWebServerRequest *request, const String &filename, size_t index,
                          uint8_t *data, size_t len, bool final) {
     if (!index) {
-        log_i("OTA: starting upload %s", filename.c_str());
+        RLOGI("OTA: starting upload %s", filename.c_str());
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-            log_e("OTA: Update.begin failed");
+            RLOGE("OTA: Update.begin failed");
         }
     }
     if (Update.write(data, len) != len) {
-        log_e("OTA: Update.write short write");
+        RLOGE("OTA: Update.write short write");
     }
     if (final) {
         if (Update.end(true)) {
-            log_i("OTA: update complete (%u bytes), rebooting", (unsigned)(index + len));
+            RLOGI("OTA: update complete (%u bytes), rebooting", (unsigned)(index + len));
         } else {
-            log_e("OTA: Update.end failed, error=%u", Update.getError());
+            RLOGE("OTA: Update.end failed, error=%u", Update.getError());
         }
     }
 }
@@ -212,10 +287,14 @@ void begin(BatteryStatus &status) {
         if (!requireAuthIfSet(r)) return;
         r->send(200, "text/html", renderPage(Pages::kUpdate));
     });
+    server.on("/logs", HTTP_GET, [](AsyncWebServerRequest *r) {
+        r->send(200, "text/html", renderPage(Pages::kLogs));
+    });
 
     server.on("/api/status", HTTP_GET, handleStatus);
     server.on("/api/history", HTTP_GET, handleHistory);
     server.on("/api/can/frames", HTTP_GET, handleCanFrames);
+    server.on("/api/logs", HTTP_GET, handleLogs);
     server.on("/api/settings", HTTP_GET, handleGetSettings);
     server.on("/api/restart", HTTP_POST, handleRestart);
 
@@ -228,7 +307,7 @@ void begin(BatteryStatus &status) {
     server.onNotFound([](AsyncWebServerRequest *r) { r->send(404, "text/plain", "Not found"); });
 
     server.begin();
-    log_i("Web server started");
+    RLOGI("Web server started");
 }
 
 } // namespace WebServer

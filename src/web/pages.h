@@ -35,6 +35,7 @@ static const char kNav[] PROGMEM = R"HTML(
 <nav>
 <a href="/" id="nav-dash">Dashboard</a>
 <a href="/can" id="nav-can">CAN Debug</a>
+<a href="/logs" id="nav-logs">Logs</a>
 <a href="/settings" id="nav-settings">Settings</a>
 <a href="/update" id="nav-update">Firmware Update</a>
 </nav>
@@ -45,25 +46,22 @@ static const char kDashboard[] PROGMEM = R"HTML(<!DOCTYPE html><html><head><meta
 <title>BMZ Monitor</title><style>%STYLE%</style></head><body>
 %NAV%
 <h1>Battery status</h1>
-<div class="card" id="protoNote"><small>Decoded via the Victron "CAN-bus BMS" protocol, confirmed for BMZ ESS packs by Victron's own compatibility notes &mdash; not yet verified field-by-field against this specific 618031's traffic. See <a href="/can">CAN Debug</a> to check raw frames.</small></div>
+<div class="card" id="protoNote"><small>Decoded via this pack's own CAN protocol (community-reverse-engineered, not an official datasheet) &mdash; each battery module appears as its own node below. See <a href="/can">CAN Debug</a> to check raw frames.</small></div>
 <div class="card grid" id="stats">
-  <div><div class="label">Pack Voltage</div><div class="stat" id="v">--</div></div>
-  <div><div class="label">Pack Current</div><div class="stat" id="i">--</div></div>
-  <div><div class="label">SOC</div><div class="stat" id="soc">--</div></div>
-  <div><div class="label">SOH</div><div class="stat" id="soh">--</div></div>
-  <div><div class="label">Temperature</div><div class="stat" id="t">--</div></div>
   <div><div class="label">Bus</div><div class="stat" id="bus">--</div></div>
+  <div><div class="label">Frames decoded</div><div class="stat" id="framesSeen">--</div></div>
 </div>
-<div class="card" id="alarmsCard">
-  <div class="label">Alarms / Warnings (raw bits)</div>
-  <div id="alarms">--</div>
+<div id="nodesContainer"></div>
+<div class="card">
+  <div class="label">Pack Voltage (history, primary node)</div>
+  <canvas id="chartV"></canvas>
 </div>
 <div class="card">
-  <div class="label">Voltage / Current (history)</div>
-  <canvas id="chartVI"></canvas>
+  <div class="label">Pack Power W, +charge/-discharge (history, primary node)</div>
+  <canvas id="chartPower"></canvas>
 </div>
 <div class="card">
-  <div class="label">SOC % (history)</div>
+  <div class="label">SOC % (history, primary node)</div>
   <canvas id="chartSoc"></canvas>
 </div>
 <script>
@@ -86,27 +84,49 @@ function drawSeries(canvas, series, minV, maxV, color){
   ctx.stroke();
 }
 
+function renderNode(n){
+  const cellRow=(n.cellVoltage||[]).map(v=>v.toFixed(3)).join(' ');
+  const tempRow=(n.boardTemp||[]).map(t=>t.toFixed(1)).join(' / ');
+  const cellTempRow=(n.cellTemp||[]).join(' ');
+  return '<div class="card">'+
+    '<div class="label">Battery node '+n.id+' '+
+      '<span class="'+(n.heartbeat?'good':'bad')+'">'+(n.heartbeat?'alive':'SILENT')+'</span></div>'+
+    '<div class="grid">'+
+      '<div><div class="label">Pack V</div><div class="stat">'+fmt(n.packVoltage,3,' V')+'</div></div>'+
+      '<div><div class="label">Power</div><div class="stat">'+fmt(n.packPowerW,0,' W')+'</div></div>'+
+      '<div><div class="label">SOC (byte4/byte5)</div><div class="stat">'+
+        (n.socByte4>=0?n.socByte4:'--')+' / '+(n.socByte5>=0?n.socByte5:'--')+' %</div></div>'+
+      '<div><div class="label">Min/Max cell</div><div class="stat">'+fmt(n.minCellVoltage,3,'')+'/'+fmt(n.maxCellVoltage,3,' V')+'</div></div>'+
+      '<div><div class="label">Relay</div><div class="stat '+(n.relayClosed?'good':'warn')+'">'+(n.relayClosed?'closed':'open')+'</div></div>'+
+      '<div><div class="label">Faults</div><div class="stat '+(n.faultBits?'bad':'good')+'">0x'+(n.faultBits||0).toString(16)+'</div></div>'+
+    '</div>'+
+    (cellRow?'<small>Cells (V): '+cellRow+'</small><br>':'')+
+    (tempRow?'<small>Board temp (C): '+tempRow+'</small><br>':'')+
+    (cellTempRow?'<small>Cell temp (C): '+cellTempRow+'</small><br>':'')+
+    '<small>Current limit: '+fmt(n.currentLimit,1,' A')+
+      (n.balanceBitmask!==undefined?'  Balancing: 0x'+n.balanceBitmask.toString(16):'')+'</small>'+
+  '</div>';
+}
+
 async function refreshStatus(){
   try{
     const r=await fetch('/api/status'); const s=await r.json();
-    document.getElementById('v').textContent=fmt(s.packVoltage,2,' V');
-    document.getElementById('i').textContent=fmt(s.packCurrent,2,' A');
-    document.getElementById('soc').textContent=s.haveSoc?s.soc+' %':'--';
-    document.getElementById('soh').textContent=s.haveSoc?s.soh+' %':'--';
-    document.getElementById('t').textContent=fmt(s.packTemperature,1,' C');
     const bus=document.getElementById('bus');
     bus.textContent=s.canAlive?'alive':'SILENT';
     bus.className='stat '+(s.canAlive?'good':'bad');
-    document.getElementById('alarms').textContent=
-      'alarms=0x'+s.alarms.toString(16)+'  warnings=0x'+s.warnings.toString(16)+
-      (s.haveAlarms?'':'  (none decoded yet)');
+    document.getElementById('framesSeen').textContent=s.framesSeen;
+    const container=document.getElementById('nodesContainer');
+    container.innerHTML=(s.nodes&&s.nodes.length)
+      ? s.nodes.map(renderNode).join('')
+      : '<div class="card"><small>No battery node frames decoded yet.</small></div>';
   }catch(e){}
 }
 
 async function refreshHistory(){
   try{
-    const r=await fetch('/api/history'); const h=await r.json();
-    drawSeries(document.getElementById('chartVI'), h.map(x=>x.v), undefined, undefined, '#3ecf8e');
+    const r=await fetch('/api/history'); const j=await r.json(); const h=j.samples;
+    drawSeries(document.getElementById('chartV'), h.map(x=>x.v), undefined, undefined, '#3ecf8e');
+    drawSeries(document.getElementById('chartPower'), h.map(x=>x.p), undefined, undefined, '#f5a623');
     drawSeries(document.getElementById('chartSoc'), h.map(x=>x.soc), 0, 100, '#9cf');
   }catch(e){}
 }
@@ -176,7 +196,7 @@ function render(){
   for(let idx=rows.length-1; idx>=0; idx--){
     const f=rows[idx];
     const tr=document.createElement('tr');
-    const dataHex=f.data.map(b=>hex(b,2)).join(' ');
+    const dataHex=(f.data.match(/.{1,2}/g)||[]).join(' ');
     tr.innerHTML='<td>'+f.t+'</td><td>'+(f.rx?'RX':'TX')+'</td><td>0x'+hex(f.id,3)+
       '</td><td>'+f.dlc+'</td><td>'+dataHex+'</td>';
     tbody.appendChild(tr);
@@ -187,6 +207,54 @@ document.getElementById('toggle').onclick=function(){
   paused=!paused; this.textContent=paused?'Resume':'Pause';
 };
 document.getElementById('clear').onclick=function(){ rows=[]; render(); };
+
+poll();
+</script>
+</body></html>)HTML";
+
+static const char kLogs[] PROGMEM = R"HTML(<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Logs</title><style>%STYLE%
+#log{background:#141414;border-radius:4px;padding:8px;font-family:ui-monospace,monospace;font-size:.78rem;
+  height:60vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+</style></head><body>
+%NAV%
+<h1>Device logs</h1>
+<div class="card">
+  <button id="toggle">Pause</button>
+  <button class="secondary" id="clear">Clear</button>
+  <label><input type="checkbox" id="autoscroll" checked style="width:auto"> Auto-scroll</label>
+</div>
+<div class="card"><div id="log"></div></div>
+<script>
+document.getElementById('nav-logs').className='active';
+let since=0, paused=false, lines=[];
+const MAX_LINES=500;
+
+async function poll(){
+  if(!paused){
+    try{
+      const r=await fetch('/api/logs?since='+since);
+      const j=await r.json();
+      since=j.seq;
+      for(const l of j.lines) lines.push(l);
+      while(lines.length>MAX_LINES) lines.shift();
+      render();
+    }catch(e){}
+  }
+  setTimeout(poll, 500);
+}
+
+function render(){
+  const el=document.getElementById('log');
+  el.textContent=lines.map(l=>'['+l.t+'] '+l.m).join('\n');
+  if(document.getElementById('autoscroll').checked) el.scrollTop=el.scrollHeight;
+}
+
+document.getElementById('toggle').onclick=function(){
+  paused=!paused; this.textContent=paused?'Resume':'Pause';
+};
+document.getElementById('clear').onclick=function(){ lines=[]; render(); };
 
 poll();
 </script>

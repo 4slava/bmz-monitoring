@@ -1,10 +1,11 @@
 #include <Arduino.h>
+#include "debug/log_sink.h"
 #include "settings.h"
 #include "wifi_setup.h"
 #include "can/twai_bus.h"
 #include "can/keepalive.h"
 #include "protocol/battery_status.h"
-#include "protocol/victron_can_bms.h"
+#include "protocol/bmz_can.h"
 #include "history.h"
 #include "display/oled.h"
 #include "web/server.h"
@@ -18,8 +19,8 @@ constexpr uint32_t kOledPeriodMs = 500;
 constexpr uint32_t kHistoryPeriodMs = 30000;
 
 void onCanFrame(const CanFrame &f) {
-    if (VictronCanBms::isProtocolFrame(f.id)) {
-        VictronCanBms::decodeFrame(f, g_status);
+    if (BmzCan::isProtocolFrame(f.id)) {
+        BmzCan::decodeFrame(f, g_status);
     }
 }
 } // namespace
@@ -27,7 +28,7 @@ void onCanFrame(const CanFrame &f) {
 void setup() {
     Serial.begin(115200);
     delay(200);
-    log_i("BMZ monitor booting...");
+    RLOGI("BMZ monitor booting...");
 
     SettingsStore::begin();
     Oled::begin();
@@ -35,14 +36,14 @@ void setup() {
     History::begin();
 
     if (!CanBus::begin(SettingsStore::get().canBitrate)) {
-        log_e("CAN bus init failed — check wiring (CTX=GPIO20, CRX=GPIO19)");
+        RLOGE("CAN bus init failed - check wiring (CTX=GPIO20, CRX=GPIO19)");
     }
     CanBus::onFrame(onCanFrame);
     Keepalive::begin();
 
     WebServer::begin(g_status);
 
-    log_i("Setup complete. IP: %s", WifiSetup::ipAddress().c_str());
+    RLOGI("Setup complete. IP: %s", WifiSetup::ipAddress().c_str());
 }
 
 void loop() {
@@ -61,7 +62,7 @@ void loop() {
     static uint32_t lastHeartbeat = 0;
     if (now - lastHeartbeat >= 2000) {
         lastHeartbeat = now;
-        log_i("heartbeat t=%lu ip=%s canAlive=%d", (unsigned long)now,
+        RLOGI("heartbeat t=%lu ip=%s canAlive=%d", (unsigned long)now,
               WifiSetup::ipAddress().c_str(), CanBus::isAlive());
     }
 

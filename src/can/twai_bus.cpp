@@ -1,4 +1,5 @@
 #include "twai_bus.h"
+#include "../debug/log_sink.h"
 #include "driver/twai.h"
 #include <vector>
 
@@ -77,7 +78,7 @@ void rxTaskFn(void *) {
             // keep-alive/debug tooling doesn't get stuck silently after the
             // first attempt.
             if (status.state == TWAI_STATE_BUS_OFF) {
-                log_w("CAN bus-off (tx_err=%lu, likely no other node ACKing) — recovering",
+                RLOGW("CAN bus-off (tx_err=%lu, likely no other node ACKing) - recovering",
                       (unsigned long)status.tx_error_counter);
                 twai_initiate_recovery();
             } else if (status.state == TWAI_STATE_STOPPED) {
@@ -111,11 +112,11 @@ bool begin(uint32_t bitrateBps) {
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
     if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK) {
-        log_e("twai_driver_install failed");
+        RLOGE("twai_driver_install failed");
         return false;
     }
     if (twai_start() != ESP_OK) {
-        log_e("twai_start failed");
+        RLOGE("twai_start failed");
         return false;
     }
     xTaskCreate(rxTaskFn, "can_rx", 4096, nullptr, 10, &g_rxTask);

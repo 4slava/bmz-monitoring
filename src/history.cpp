@@ -1,8 +1,7 @@
 #include "history.h"
+#include "debug/log_sink.h"
 #include <Arduino.h>
 #include <LittleFS.h>
-#include <vector>
-#include <algorithm>
 
 namespace History {
 namespace {
@@ -36,12 +35,22 @@ void pushRam(const HistorySample &s) {
     if (g_count < kRamCapacity) g_count++;
 }
 
-void loadFileInOrder(const char *path, std::vector<HistorySample> &out) {
+// Reads only the last `want` samples from `path` (which holds `total` of
+// them) directly into the RAM ring, oldest-first, via a seek — no
+// intermediate buffer. `total` samples fit in a bounded 320KB-RAM device;
+// loading every persisted sample from both files into one unbounded vector
+// (the previous approach) could require hundreds of KB in one transient
+// allocation, fragmenting the heap badly enough to break later small
+// allocations for the rest of the session.
+void appendTail(const char *path, size_t total, size_t want) {
+    if (want == 0) return;
     File f = LittleFS.open(path, FILE_READ);
     if (!f) return;
+    f.seek((total - want) * sizeof(HistorySample));
     HistorySample s;
-    while (f.read(reinterpret_cast<uint8_t *>(&s), sizeof(s)) == (int)sizeof(s)) {
-        out.push_back(s);
+    for (size_t i = 0; i < want; i++) {
+        if (f.read(reinterpret_cast<uint8_t *>(&s), sizeof(s)) != (int)sizeof(s)) break;
+        pushRam(s);
     }
     f.close();
 }
@@ -50,33 +59,43 @@ void loadFileInOrder(const char *path, std::vector<HistorySample> &out) {
 
 void begin() {
     if (!LittleFS.begin(true)) {
-        log_e("LittleFS mount failed");
+        RLOGE("LittleFS mount failed");
         return;
     }
-    // Load both files, sort by epoch, replay the most recent kRamCapacity
-    // samples into the RAM ring so history survives a reboot.
-    std::vector<HistorySample> all;
-    loadFileInOrder(kFiles[0], all);
-    loadFileInOrder(kFiles[1], all);
-    std::sort(all.begin(), all.end(), [](const HistorySample &a, const HistorySample &b) {
-        return a.epochSec < b.epochSec;
-    });
-    size_t start = all.size() > kRamCapacity ? all.size() - kRamCapacity : 0;
-    for (size_t i = start; i < all.size(); i++) pushRam(all[i]);
 
+    size_t sz[2];
+    sz[0] = LittleFS.exists(kFiles[0]) ? LittleFS.open(kFiles[0], FILE_READ).size() : 0;
+    sz[1] = LittleFS.exists(kFiles[1]) ? LittleFS.open(kFiles[1], FILE_READ).size() : 0;
     // Resume appending to whichever file is smaller (likely the "fresher" one).
-    size_t sz0 = LittleFS.exists(kFiles[0]) ? LittleFS.open(kFiles[0], FILE_READ).size() : 0;
-    size_t sz1 = LittleFS.exists(kFiles[1]) ? LittleFS.open(kFiles[1], FILE_READ).size() : 0;
-    g_activeFile = (sz1 < sz0) ? 1 : 0;
+    g_activeFile = (sz[1] < sz[0]) ? 1 : 0;
+    uint8_t otherFile = 1 - g_activeFile;
+
+    // The active file holds the most recent run of samples; the other file
+    // holds the batch immediately preceding it. Replay oldest-first: the
+    // tail of the older file (just enough to fill the gap), then all of the
+    // active file.
+    size_t countActive = sz[g_activeFile] / sizeof(HistorySample);
+    size_t countOther = sz[otherFile] / sizeof(HistorySample);
+    size_t fromActive = min(countActive, kRamCapacity);
+    size_t fromOther = fromActive < kRamCapacity ? min(countOther, kRamCapacity - fromActive) : 0;
+
+    appendTail(kFiles[otherFile], countOther, fromOther);
+    appendTail(kFiles[g_activeFile], countActive, fromActive);
 }
 
 void sampleNow(const BatteryStatus &status) {
     HistorySample s;
     s.epochSec = (uint32_t)time(nullptr);
-    s.packVoltage = status.packVoltage;
-    s.packCurrent = status.packCurrent;
-    s.soc = status.haveSoc ? (int16_t)status.soc : -1;
-    s.packTemperature = status.packTemperature;
+    int idx = status.firstPresentIndex();
+    if (idx >= 0) {
+        const NodeStatus &n = status.nodes[idx];
+        s.packVoltage = n.packVoltage();
+        s.packPowerW = n.packPowerW;
+        s.soc = n.socByte5;
+        if (n.haveBoardTemp) {
+            s.packTemperature = (n.boardTemp[0] + n.boardTemp[1] + n.boardTemp[2]) / 3.0f;
+        }
+    }
     pushRam(s);
     appendToFile(s);
 }

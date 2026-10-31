@@ -14,8 +14,8 @@
 struct HistorySample {
     uint32_t epochSec = 0;
     float packVoltage = 0;
-    float packCurrent = 0;
-    int16_t soc = -1; // -1 = unknown
+    float packPowerW = 0; // charge (+) / discharge (-) power, watts
+    int16_t soc = -1;     // -1 = unknown
     float packTemperature = 0;
 };
 
