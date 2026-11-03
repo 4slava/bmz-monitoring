@@ -170,13 +170,19 @@ further:
     check. Other bits also changed per-node (e.g. bit 27 on node 1, bits
     28/29 on node 2) but weren't consistent between the two modules, so
     treat only 8/9/11 as a real lead for now.
-  Still not confirmed which (if either) of these actually *causes* the
-  LED color vs. just correlating with the same underlying "BMS considers
-  itself not-fully-happy" state that a reboot clears — and a reboot
-  clearing it doesn't rule out the earlier "balancing near 100%" guess,
-  since restarting the BMS may also reset or pause balancing. Next useful
-  data point: catch the LED turning red again *without* a reboot in
-  between (e.g. next time the pack nears full charge again) and check
+  Checked whether the reboot had simply paused/reset balancing (which
+  would've undercut the heartbeat/faultBits correlation) — it hadn't:
+  comparing `balanceBitmask` bit-for-bit, node 1 went from 18 bits set to
+  16 (slightly down) but node 2 went from 15 to **20** (up). Balancing
+  intensity was essentially unchanged by the reboot on both modules, yet
+  the LED still went red->green — which actually weakens the original
+  "solid red = balancing near 100%" guess, since balancing stayed just as
+  active either way, and leaves heartbeat + faultBits 8/9/11 as the
+  better-supported signal so far (they changed consistently; balancing
+  didn't). Still not confirmed which (if either) *causes* the LED color
+  vs. just correlating with it. Next useful data point: catch the LED
+  turning red again *without* a reboot in between (e.g. next time the
+  pack nears full charge again) and check
   whether heartbeat/bits 8-9-11 track it the same way without a restart
   in the mix.
 
