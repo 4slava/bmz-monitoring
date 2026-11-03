@@ -3,10 +3,11 @@
 #include <cstdint>
 #include "protocol/battery_status.h"
 
-// Periodic history sampler: a RAM ring buffer (always available, feeds the
-// live graph immediately) that is also appended to LittleFS so recent
-// history survives a reboot. Flash usage is bounded via two alternating
-// capped files (see history.cpp) rather than one ever-growing log.
+// Persists samples to LittleFS (two alternating, capped files — see
+// history.cpp) rather than keeping a RAM copy: at 200KB/file this already
+// holds several days of history (far more than any sparkline can usefully
+// draw), so reads just stride through the files on demand instead of
+// needing a second large buffer in RAM.
 //
 // Timestamps are Unix epoch seconds (via NTP, set up in wifi_setup.cpp).
 // Before NTP sync completes, timestamps will be near-zero — acceptable,
@@ -15,15 +16,19 @@ struct HistorySample {
     uint32_t epochSec = 0;
     float packVoltage = 0;
     float packPowerW = 0; // charge (+) / discharge (-) power, watts
-    int16_t soc = -1;     // -1 = unknown
+    int16_t soc = -1;     // -1 = unknown (also used while a BMS restart has
+                           // made the reported value untrustworthy, see
+                           // NodeStatus::socValid)
     float packTemperature = 0;
 };
 
 namespace History {
-void begin();                 // loads persisted samples into the RAM ring, starts sampler task
+void begin();                 // mounts LittleFS, figures out which file to keep appending to
 void sampleNow(const BatteryStatus &status); // called periodically from main loop/task
 
-// Copies up to maxCount most recent samples (oldest first) into out.
-// Returns how many were copied.
-size_t getRecent(HistorySample *out, size_t maxCount);
+// Fills up to maxOut samples, oldest-first, evenly spread across everything
+// currently persisted (which may be many times maxOut) so a fixed-size
+// response still covers the full retained time range. Returns how many were
+// written.
+size_t getDownsampled(HistorySample *out, size_t maxOut);
 } // namespace History

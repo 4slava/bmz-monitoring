@@ -30,7 +30,9 @@ void drawBatteryPage(const BatteryStatus &s) {
     u8g2.drawStr(0, 10, line1);
 
     char line2[32];
-    if (idx >= 0 && s.nodes[idx].socByte5 >= 0) {
+    if (idx >= 0 && !s.nodes[idx].socValid) {
+        snprintf(line2, sizeof(line2), "node%d warming up", idx + 1);
+    } else if (idx >= 0 && s.nodes[idx].socByte5 >= 0) {
         snprintf(line2, sizeof(line2), "node%d SOC %d%%", idx + 1, s.nodes[idx].socByte5);
     } else {
         snprintf(line2, sizeof(line2), "SOC --");

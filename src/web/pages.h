@@ -27,7 +27,7 @@ input,select,button{background:#222;color:#eee;border:1px solid #444;border-radi
 button{cursor:pointer;background:#2d6cdf;border-color:#2d6cdf}
 button.secondary{background:#333;border-color:#444}
 label{display:block;font-size:.8rem;margin-top:10px;color:#ccc}
-canvas{width:100%;height:80px;background:#141414;border-radius:4px}
+canvas{width:100%;height:110px;background:#141414;border-radius:4px}
 small{color:#888}
 )CSS";
 
@@ -53,33 +53,77 @@ static const char kDashboard[] PROGMEM = R"HTML(<!DOCTYPE html><html><head><meta
 </div>
 <div id="nodesContainer"></div>
 <div class="card">
-  <div class="label">Pack Voltage (history, primary node)</div>
+  <div class="label">History (primary node)</div>
+  <small id="histRange">Loading&hellip;</small>
+</div>
+<div class="card">
+  <div class="label">Pack Voltage (V)</div>
   <canvas id="chartV"></canvas>
 </div>
 <div class="card">
-  <div class="label">Pack Power W, +charge/-discharge (history, primary node)</div>
+  <div class="label">Pack Power (W), +charge / -discharge</div>
   <canvas id="chartPower"></canvas>
 </div>
 <div class="card">
-  <div class="label">SOC % (history, primary node)</div>
+  <div class="label">SOC (%)</div>
   <canvas id="chartSoc"></canvas>
 </div>
 <script>
 document.getElementById('nav-dash').className='active';
 function fmt(v,d,unit){return (v===null||v===undefined)?'--':v.toFixed(d)+unit;}
 
-function drawSeries(canvas, series, minV, maxV, color){
+const MIN_VALID_EPOCH=1700000000; // ~Nov 2023; below this = pre-NTP-sync junk, not a real date
+function fmtTime(t){
+  if(!t||t<MIN_VALID_EPOCH) return '--';
+  const d=new Date(t*1000);
+  const pad=x=>x.toString().padStart(2,'0');
+  return pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+
+// points: [{t: epochSec, y: value|null}], oldest first.
+function drawSeries(canvas, points, minV, maxV, color, decimals){
   const ctx=canvas.getContext('2d');
   const w=canvas.width=canvas.clientWidth, h=canvas.height=canvas.clientHeight;
   ctx.clearRect(0,0,w,h);
-  if(series.length<2) return;
-  if(minV===undefined){minV=Math.min(...series);maxV=Math.max(...series);}
+  if(points.length<2){
+    ctx.fillStyle='#666'; ctx.font='11px system-ui'; ctx.textAlign='center';
+    ctx.fillText('not enough data yet', w/2, h/2);
+    return;
+  }
+  const padL=40, padR=4, padT=4, padB=14;
+  const plotW=w-padL-padR, plotH=h-padT-padB;
+  if(minV===undefined){
+    const vals=points.map(p=>p.y).filter(v=>v!==null&&v!==undefined);
+    minV=Math.min(...vals); maxV=Math.max(...vals);
+  }
   if(maxV-minV<0.001){maxV=minV+1;}
+
+  ctx.strokeStyle='#2a2a2a'; ctx.lineWidth=1;
+  ctx.strokeRect(padL+0.5,padT+0.5,plotW,plotH);
+
+  ctx.fillStyle='#888'; ctx.font='9px system-ui'; ctx.textAlign='right';
+  [1,0.5,0].forEach(f=>{
+    const v=minV+(maxV-minV)*f;
+    const y=padT+(1-f)*plotH;
+    ctx.fillText(v.toFixed(decimals), padL-4, y+3);
+  });
+
+  const n=points.length;
+  ctx.textAlign='center';
+  const ticks=4;
+  for(let i=0;i<=ticks;i++){
+    const idx=Math.round(i/ticks*(n-1));
+    const x=padL+idx/(n-1)*plotW;
+    ctx.fillText(fmtTime(points[idx].t), x, h-2);
+  }
+
   ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.beginPath();
-  series.forEach((v,idx)=>{
-    const x=idx/(series.length-1)*w;
-    const y=h-((v-minV)/(maxV-minV))*h;
-    idx===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  let started=false;
+  points.forEach((p,idx)=>{
+    const x=padL+idx/(n-1)*plotW;
+    if(p.y===null||p.y===undefined){ started=false; return; }
+    const y=padT+(1-(p.y-minV)/(maxV-minV))*plotH;
+    if(!started){ ctx.moveTo(x,y); started=true; } else { ctx.lineTo(x,y); }
   });
   ctx.stroke();
 }
@@ -94,8 +138,9 @@ function renderNode(n){
     '<div class="grid">'+
       '<div><div class="label">Pack V</div><div class="stat">'+fmt(n.packVoltage,3,' V')+'</div></div>'+
       '<div><div class="label">Power</div><div class="stat">'+fmt(n.packPowerW,0,' W')+'</div></div>'+
-      '<div><div class="label">SOC (byte4/byte5)</div><div class="stat">'+
-        (n.socByte4>=0?n.socByte4:'--')+' / '+(n.socByte5>=0?n.socByte5:'--')+' %</div></div>'+
+      '<div><div class="label">SOC (byte4/byte5)</div><div class="stat'+(n.socValid?'':' warn')+'">'+
+        (n.socValid ? ((n.socByte4>=0?n.socByte4:'--')+' / '+(n.socByte5>=0?n.socByte5:'--')+' %') : 'warming up') +
+        '</div></div>'+
       '<div><div class="label">Min/Max cell</div><div class="stat">'+fmt(n.minCellVoltage,3,'')+'/'+fmt(n.maxCellVoltage,3,' V')+'</div></div>'+
       '<div><div class="label">Relay</div><div class="stat '+(n.relayClosed?'good':'warn')+'">'+(n.relayClosed?'closed':'open')+'</div></div>'+
       '<div><div class="label">Faults</div><div class="stat '+(n.faultBits?'bad':'good')+'">0x'+(n.faultBits||0).toString(16)+'</div></div>'+
@@ -125,9 +170,14 @@ async function refreshStatus(){
 async function refreshHistory(){
   try{
     const r=await fetch('/api/history'); const j=await r.json(); const h=j.samples;
-    drawSeries(document.getElementById('chartV'), h.map(x=>x.v), undefined, undefined, '#3ecf8e');
-    drawSeries(document.getElementById('chartPower'), h.map(x=>x.p), undefined, undefined, '#f5a623');
-    drawSeries(document.getElementById('chartSoc'), h.map(x=>x.soc), 0, 100, '#9cf');
+    const range=document.getElementById('histRange');
+    const valid=h.filter(x=>x.t>=MIN_VALID_EPOCH);
+    range.textContent = valid.length>1
+      ? (h.length+' points, '+fmtTime(valid[0].t)+' → '+fmtTime(valid[valid.length-1].t))
+      : 'Not enough history yet (clock not synced).';
+    drawSeries(document.getElementById('chartV'), h.map(x=>({t:x.t,y:x.v})), undefined, undefined, '#3ecf8e', 2);
+    drawSeries(document.getElementById('chartPower'), h.map(x=>({t:x.t,y:x.p})), undefined, undefined, '#f5a623', 0);
+    drawSeries(document.getElementById('chartSoc'), h.map(x=>({t:x.t,y:x.soc<0?null:x.soc})), 0, 100, '#9cf', 0);
   }catch(e){}
 }
 

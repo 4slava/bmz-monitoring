@@ -123,6 +123,7 @@ void decodeFrame(const CanFrame &f, BatteryStatus &status) {
                 n.havePackPower = true;
                 n.socByte4 = f.data[4];
                 n.socByte5 = f.data[5];
+                n.socValid = !(n.haveIdentity && n.readyPhase == 0);
             }
             break;
 

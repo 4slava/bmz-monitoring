@@ -67,6 +67,7 @@ void handleStatus(AsyncWebServerRequest *request) {
             o["packPowerW"] = n.packPowerW;
             o["socByte4"] = n.socByte4;
             o["socByte5"] = n.socByte5;
+            o["socValid"] = n.socValid;
         }
         if (n.haveBoardTemp) {
             JsonArray bt = o["boardTemp"].to<JsonArray>();
@@ -99,13 +100,14 @@ void handleStatus(AsyncWebServerRequest *request) {
 }
 
 void handleHistory(AsyncWebServerRequest *request) {
-    // Capped well below the full 2880-sample ring (24h @ 30s/sample): building
-    // an ArduinoJson document for thousands of objects plus the resulting
-    // ~170KB string doesn't fit in this device's RAM. A few hundred points is
-    // already more than the dashboard's sparkline can usefully show.
+    // Capped at 300 objects: building an ArduinoJson document for thousands
+    // of objects plus the resulting string doesn't fit in this device's RAM.
+    // getDownsampled() spreads these 300 evenly across everything retained
+    // on flash (days' worth, see history.cpp), so the chart keeps covering
+    // the full history instead of only the most recent slice of it.
     constexpr size_t kMaxReturned = 300;
     static HistorySample buf[kMaxReturned];
-    size_t n = History::getRecent(buf, kMaxReturned);
+    size_t n = History::getDownsampled(buf, kMaxReturned);
     JsonDocument doc;
     JsonArray arr = doc["samples"].to<JsonArray>();
     for (size_t i = 0; i < n; i++) {

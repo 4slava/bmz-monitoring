@@ -53,6 +53,12 @@ struct NodeStatus {
     int16_t socByte4 = -1;  // %, from byte 4
     int16_t socByte5 = -1;  // %, from byte 5
     bool havePackPower = false;
+    // False while the module's own readiness-phase byte (0x6C1 byte 4) says
+    // it's still "warming up" after a restart — observed: the BMS reports a
+    // stale/bogus SOC for a bit right after power-up, before it has
+    // resynced. This can only hide that known-bad window, not produce the
+    // real value — there's no other field to derive true SOC from.
+    bool socValid = true;
 
     // 0x181 — 3 channels of board temperature (NTC 1-3)
     float boardTemp[3] = {0};
