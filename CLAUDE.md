@@ -142,6 +142,26 @@ further:
   confirmed); purpose of the `0x80`-base heartbeat-like frame; the
   `0x3C0` balancing bitmask and its bytes 4-5; `0x380` bytes 2-3 (confirmed
   *not* capacity, otherwise unknown).
+- **No vendor documentation exists for this unit at all** — everything above
+  is derived from a community writeup plus this project's own live
+  cross-checks, never from an official datasheet. Treat anything not
+  explicitly cross-checked as a guess, including the LED behavior note
+  below.
+- **BMS status LED color, 2026-11-03 field notes (unconfirmed)**: observed
+  going off → blinking red → solid red as the pack approached a near-full
+  charge (SOC 95-96%) with heavy cell balancing (`balanceBitmask` nearly
+  saturated on both modules) and the EcoFlow backing off charging
+  (`packPowerW` ~0, `currentLimit` back to the unthrottled 28.7A). Likely
+  interpretation: solid red tracks balancing intensity near 100% SOC
+  rather than a hard fault — `relayClosed` stayed `true` throughout and
+  voltage/current readings stayed sane. Tried to find a matching bit flip
+  in `statusFlags` (0x140 bytes 4-5) between the blinking-red and
+  solid-red snapshots; the bits that changed differed between node 1 and
+  node 2, so no single-bit mapping could be confirmed from this one
+  transition. Worth re-checking next time SOC drops out of the high-90s:
+  if the LED goes back to off and `statusFlags` settles to a consistent
+  pattern, that's real evidence; if it stays solid red regardless of SOC,
+  this interpretation is wrong.
 
 If given new reverse-engineering input (another community writeup, a new
 cross-check against real charger/inverter numbers), update both
