@@ -22,6 +22,15 @@ struct NodeStatus {
     uint32_t lastFrameMs = 0;
 
     // 0x201/0x241/0x281/0x2C1 — cell voltages 1-16 (4 per frame), volts.
+    // Each 16-bit field is 15 bits of mV plus bit 15, found (2026-11-03,
+    // live, near-full-charge/active-balancing) to be a per-cell
+    // balancing-active flag, not part of the magnitude: unmasked, any cell
+    // with that bit set read ~10x too high (e.g. 36.3 "V"); masked, all 16
+    // cells across both modules clustered tightly at a believable
+    // 3.40-3.47V. Partially (not fully, ~70% bit-for-bit) corroborated
+    // against the separately-decoded balanceBitmask below — good enough to
+    // trust the voltage fix, not yet enough to treat this as a second
+    // confirmed balancing source.
     // Pack voltage is derived as the sum of these rather than guessed from
     // extra bytes, since the source's "+ packVoltage" note on 0x2C1 is
     // ambiguous about byte layout.
@@ -33,8 +42,10 @@ struct NodeStatus {
         return sum;
     }
 
-    // 0x141 — min/max cell voltage (bytes 0-1 / 2-3, assumed mV) + BMS
-    // status flags (bytes 4-5, confirmed location, meaning undecoded)
+    // 0x141 — min/max cell voltage (bytes 0-1 / 2-3, mV with bit 15 as the
+    // same per-cell balancing-active flag as the cell-voltage frames, see
+    // above — masked off here too) + BMS status flags (bytes 4-5,
+    // confirmed location, meaning undecoded)
     float minCellVoltage = 0;
     float maxCellVoltage = 0;
     uint16_t statusFlags = 0;

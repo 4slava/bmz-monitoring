@@ -122,14 +122,20 @@ what's actually confirmed vs. guessed, for anyone reverse-engineering
 further:
 
 - **Confirmed solid**: node addressing scheme (`base = id & ~0x3F`,
-  `node = id & 0x3F`), cell voltages (0x200-0x2C0), current limit scaling
-  (0x380, matches real ~28.7A spec exactly), power-not-current on 0x1C0
-  bytes 2-3 (cross-checked against a real ~1300W EcoFlow charging session
-  and matched a ~270W/pack estimate almost exactly).
+  `node = id & 0x3F`), cell voltages (0x200-0x2C0, and min/max within
+  0x140) as 15-bit mV fields with bit 15 as a per-cell balancing-active
+  flag (confirmed live, 2026-11-03, during a near-full-charge balancing
+  event — unmasked, any cell with the bit set read ~10x too high; masked,
+  all 16 cells across both modules clustered tightly at a believable
+  3.40-3.47V), current limit scaling (0x380, matches real ~28.7A spec
+  exactly), power-not-current on 0x1C0 bytes 2-3 (cross-checked against a
+  real ~1300W EcoFlow charging session and matched a ~270W/pack estimate
+  almost exactly).
 - **Guessed, not cross-checked**: board temp scaling (×0.1°C), cell temp
-  scaling (raw int8, no offset), min/max cell voltage byte layout within
-  0x140 (bytes 4-5 status-flags location is solid; the 0-1/2-3 min/max
-  split is the obvious convention, not independently verified).
+  scaling (raw int8, no offset); within 0x140, which half is "min" and
+  which is "max" is still just the obvious convention (bytes 0-1 / 2-3),
+  not independently verified — only the bit-15-masked mV scaling of each
+  half is now confirmed, not which one means which.
 - **Actively unresolved**: which of SOC byte 4 or byte 5 (both in 0x1C0) is
   authoritative — both are currently exposed separately rather than
   picking one; power sign convention (+charge vs +discharge not

@@ -54,7 +54,10 @@ bool baseKnown(uint32_t base) {
 void decodeCellVoltages(NodeStatus &n, const CanFrame &f, int startIdx) {
     if (f.dlc < 8) return;
     for (int i = 0; i < 4; i++) {
-        n.cellVoltage[startIdx + i] = u16le(f.data + i * 2) / 1000.0f;
+        // Bit 15 is not part of the voltage — see battery_status.h for how
+        // this was found (a live near-full-charge/balancing event made it
+        // obvious: unmasked, every cell with the bit set read ~10x too high).
+        n.cellVoltage[startIdx + i] = (u16le(f.data + i * 2) & 0x7FFF) / 1000.0f;
     }
     n.haveCellVoltages = true;
 }
@@ -101,8 +104,8 @@ void decodeFrame(const CanFrame &f, BatteryStatus &status) {
 
         case kBaseMinMaxFlags:
             if (f.dlc >= 6) {
-                n.minCellVoltage = u16le(f.data) / 1000.0f;
-                n.maxCellVoltage = u16le(f.data + 2) / 1000.0f;
+                n.minCellVoltage = (u16le(f.data) & 0x7FFF) / 1000.0f;
+                n.maxCellVoltage = (u16le(f.data + 2) & 0x7FFF) / 1000.0f;
                 n.statusFlags = u16le(f.data + 4);
                 n.haveMinMax = true;
             }

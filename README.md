@@ -54,10 +54,10 @@ are community-reverse-engineered, not from an official datasheet).
 | `0xC0` | Heartbeat (byte 0 == 1) |
 | `0x80` | Second heartbeat-like frame, purpose unconfirmed |
 | `0x100` | Bytes 0-3 fault bits, byte 5 main relay (1=closed) |
-| `0x140` | Min/max cell voltage (bytes 0-1/2-3) + BMS status flags (4-5) |
+| `0x140` | Min/max cell voltage (bytes 0-1/2-3, 15-bit mV + bit 15 = balancing-active flag) + BMS status flags (4-5) |
 | `0x180` | 3x board temperature (NTC 1-3) |
 | `0x1C0` | Bytes 2-3: charge/discharge power, watts (×0.1 — confirmed by cross-checking a real ~1300W charging session). Bytes 4/5: two SOC candidates, both exposed since neither is confirmed authoritative |
-| `0x200`/`0x240`/`0x280`/`0x2C0` | Cell voltages 1-4/5-8/9-12/13-16 (pack voltage = sum) |
+| `0x200`/`0x240`/`0x280`/`0x2C0` | Cell voltages 1-4/5-8/9-12/13-16, each a 15-bit mV field + bit 15 = balancing-active flag (confirmed live during a near-full-charge balancing event — unmasked, a balancing cell reads ~10x too high) (pack voltage = sum) |
 | `0x300` | 6x cell temperature, 1 byte each |
 | `0x380` | Bytes 0-1: current limit (×0.1A, confirmed ~28.7A). Bytes 2-3: unknown, confirmed not capacity |
 | `0x3C0` | Bytes 0-3: presumed balancing bitmask. Bytes 4-5: undecoded |
