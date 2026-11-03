@@ -147,21 +147,38 @@ further:
   cross-checks, never from an official datasheet. Treat anything not
   explicitly cross-checked as a guess, including the LED behavior note
   below.
-- **BMS status LED color, 2026-11-03 field notes (unconfirmed)**: observed
-  going off → blinking red → solid red as the pack approached a near-full
-  charge (SOC 95-96%) with heavy cell balancing (`balanceBitmask` nearly
+- **BMS status LED color, 2026-11-03 field notes**: observed going
+  off → blinking red → solid red as the pack approached a near-full charge
+  (SOC 95-96%) with heavy cell balancing (`balanceBitmask` nearly
   saturated on both modules) and the EcoFlow backing off charging
-  (`packPowerW` ~0, `currentLimit` back to the unthrottled 28.7A). Likely
-  interpretation: solid red tracks balancing intensity near 100% SOC
-  rather than a hard fault — `relayClosed` stayed `true` throughout and
-  voltage/current readings stayed sane. Tried to find a matching bit flip
-  in `statusFlags` (0x140 bytes 4-5) between the blinking-red and
-  solid-red snapshots; the bits that changed differed between node 1 and
-  node 2, so no single-bit mapping could be confirmed from this one
-  transition. Worth re-checking next time SOC drops out of the high-90s:
-  if the LED goes back to off and `statusFlags` settles to a consistent
-  pattern, that's real evidence; if it stays solid red regardless of SOC,
-  this interpretation is wrong.
+  (`packPowerW` ~0, `currentLimit` back to the unthrottled 28.7A).
+  `statusFlags` (0x140 bytes 4-5) was a dead end — checked for a bit flip
+  between blinking-red and solid-red, and again between solid-red and
+  green-after-reboot; it never changed at all across all three states, so
+  it's not what the LED is tracking.
+  Two things DID line up cleanly after rebooting both the ESP32 and the
+  BMS cleared the red LED back to green:
+  - `heartbeat` (0xC1/0xC2, byte 0 == 1) went from `false` on both nodes
+    — for the *entire* red-LED period, blinking and solid alike — to
+    `true` on both immediately after the reboot. The dashboard/OLED were
+    already surfacing this the whole time as "SILENT", we just hadn't
+    connected it to the physical LED.
+  - `faultBits` (0x101/0x102 bytes 0-3) bits 8, 9, and 11 were set on
+    *both* modules throughout the red-LED period and cleared on *both*
+    immediately after reboot — consistent across both nodes, which is
+    the first faultBits sub-pattern that's held up to a cross-module
+    check. Other bits also changed per-node (e.g. bit 27 on node 1, bits
+    28/29 on node 2) but weren't consistent between the two modules, so
+    treat only 8/9/11 as a real lead for now.
+  Still not confirmed which (if either) of these actually *causes* the
+  LED color vs. just correlating with the same underlying "BMS considers
+  itself not-fully-happy" state that a reboot clears — and a reboot
+  clearing it doesn't rule out the earlier "balancing near 100%" guess,
+  since restarting the BMS may also reset or pause balancing. Next useful
+  data point: catch the LED turning red again *without* a reboot in
+  between (e.g. next time the pack nears full charge again) and check
+  whether heartbeat/bits 8-9-11 track it the same way without a restart
+  in the mix.
 
 If given new reverse-engineering input (another community writeup, a new
 cross-check against real charger/inverter numbers), update both
